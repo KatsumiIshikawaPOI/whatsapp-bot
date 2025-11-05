@@ -37,7 +37,7 @@ app.post("/whatsapp", async (req, res) => {
 
     // WhatsAppへ返信
     await tw.messages.create({
-      from: "whatsapp:+14155238886", // Twilio Sandbox番号
+      from: "whatsapp:+15558495873", // Twilio Sandbox番号
       to: from,
       body: reply
     });
