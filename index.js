@@ -183,3 +183,12 @@ app.post("/line-webhook", line.middleware(lineConfig), async (req, res) => {
   }
 });
 // ======= LINE Webhook（完成版：1回定義）ここまで =======
+/* ====== 健康チェック & ルート ====== */
+app.get("/", (_req, res) => res.send("ok"));
+app.get("/healthz", (_req, res) => res.send("healthy"));
+
+/* ====== RenderのPORTで必ずlisten ====== */
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => {
+  console.log(`Server listening on ${PORT}`);
+});
