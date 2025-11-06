@@ -47,58 +47,64 @@ app.post("/line-webhook", line.middleware(lineConfig), async (req, res) => {
       }
 
       // 画像メッセージ処理
-  else if (ev.type === "message" && ev.message.type === "image") {
-  console.log("🖼️ 画像メッセージを受信しました");
-  const messageId = ev.message.id;
-  const url = `https://api-data.line.me/v2/bot/message/${messageId}/content`;
+      else if (ev.type === "message" && ev.message.type === "image") {
+        console.log("🖼️ 画像メッセージを受信しました");
+        const messageId = ev.message.id;
+        const url = `https://api-data.line.me/v2/bot/message/${messageId}/content`;
 
-  const response = await fetch(url, {
-    headers: { Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` }
-  });
-  const buffer = Buffer.from(await response.arrayBuffer());
-  fs.writeFileSync("/tmp/upload.jpg", buffer);
+        const response = await fetch(url, {
+          headers: { Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` }
+        });
+        const buffer = Buffer.from(await response.arrayBuffer());
+        fs.writeFileSync("/tmp/upload.jpg", buffer);
 
-  // GPT-4o で OCR解析（表データ抽出）
-  const base64Image = buffer.toString("base64");
-  const result = await ai.chat.completions.create({
-    model: "gpt-4o-mini",
-    messages: [
-      {
-        role: "user",
-        content: [
-          { type: "text", text: "この画像の表をJSON形式（date, delivery, credit, cash, total, diff, mark）で抽出してください。" },
-          { type: "image_url", image_url: { url: "data:image/jpeg;base64," + base64Image } }
-        ]
+        // GPT-4o で OCR解析（表データ抽出）
+        const base64Image = buffer.toString("base64");
+        const result = await ai.chat.completions.create({
+          model: "gpt-4o-mini",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "この画像の表をJSON形式（date, delivery, credit, cash, total, diff, mark）で抽出してください。" },
+                { type: "image_url", image_url: { url: "data:image/jpeg;base64," + base64Image } }
+              ]
+            }
+          ]
+        });
+
+        const extractedText = result.choices[0].message.content;
+        console.log("📊 OCR結果:", extractedText);
+
+        // JSON解析 & Excel書き出し
+        try {
+          const data = JSON.parse(extractedText);
+          const XLSX = await import("xlsx");
+          const ws = XLSX.utils.json_to_sheet(data);
+          const wb = XLSX.utils.book_new();
+          XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+          const filePath = "/tmp/output.xlsx";
+          XLSX.writeFile(wb, filePath);
+
+          // LINEで通知
+          await lineClient.replyMessage(ev.replyToken, [
+            { type: "text", text: "✅ 画像の表をExcelに変換しました。" }
+          ]);
+
+          console.log("✅ Excel生成完了:", filePath);
+        } catch (e) {
+          console.error("❌ Excel出力エラー:", e);
+          await lineClient.replyMessage(ev.replyToken, [
+            { type: "text", text: "Excel変換に失敗しました。" }
+          ]);
+        }
       }
-    ]
-  });
-
-  const extractedText = result.choices[0].message.content;
-  console.log("📊 OCR結果:", extractedText);
-
-  // JSON解析 & Excel書き出し
-  try {
-    const data = JSON.parse(extractedText);
-    const XLSX = await import("xlsx");
-    const ws = XLSX.utils.json_to_sheet(data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
-    const filePath = "/tmp/output.xlsx";
-    XLSX.writeFile(wb, filePath);
-
-    // LINEで通知
-    await lineClient.replyMessage(ev.replyToken, [
-      { type: "text", text: "✅ 画像の表をExcelに変換しました。" }
-    ]);
-
-    console.log("✅ Excel生成完了:", filePath);
-  } catch (e) {
-    console.error("❌ Excel出力エラー:", e);
-    await lineClient.replyMessage(ev.replyToken, [
-      { type: "text", text: "Excel変換に失敗しました。" }
-    ]);
+    } catch (e) {
+      console.error("❌ LINE処理エラー:", e?.message || e);
+    }
   }
-}
+});
+
 // ===== WhatsApp =====
 app.post("/whatsapp", async (req, res) => {
   console.log("📩 WhatsApp受信:", req.body);
