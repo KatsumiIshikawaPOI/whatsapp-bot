@@ -59,14 +59,15 @@ app.post("/line-webhook", line.middleware(lineConfig), async (req, res) => {
         fs.writeFileSync("/tmp/upload.jpg", buffer);
 
         // GPT-4o で画像解析
+        const base64Image = buffer.toString("base64");
         const result = await ai.chat.completions.create({
           model: "gpt-4o-mini",
           messages: [
             {
               role: "user",
               content: [
-                { type: "text", text: "この画像の内容を簡潔に説明してください。" },
-                { type: "image_url", image_url: "data:image/jpeg;base64," + buffer.toString("base64") }
+                { type: "input_text", text: "この画像の内容を簡潔に説明してください。" },
+                { type: "input_image", image_data: base64Image }
               ]
             }
           ]
