@@ -65,22 +65,20 @@ app.post("/line-webhook", line.middleware(lineConfig), async (req, res) => {
     try {
       if (ev.type !== "message") continue;
 
-   /* ===== テキスト ===== */
+ /* ===== テキスト ===== */
 if (ev.message.type === "text") {
   const userText = (ev.message.text || "").trim();
-  const is1on1 = ev.source?.type === "user"; // 個チャかグループか
+  const is1on1 = ev.source?.type === "user"; // 個チャ or グループ
 
-  // グループでは「K 」または「Ｋ 」で始まる場合のみ反応
-  const calledK = /^ *[KＫｋk][\s　]/.test(userText);
+  // グループでは「K + 空白（半/全角OK）」で始まる時だけ反応
+  const calledK = /^[\s　]*[KＫｋk][\s　]+/.test(userText);
 
-  // 条件：1対1 or 呼びかけがある場合のみ返信
   if (!is1on1 && !calledK) {
     console.log("（スルー）呼びかけなし:", userText);
     continue;
   }
 
-  // 「K 」を削除してクリーンに
-  const cleanText = userText.replace(/^ *[KＫｋk][\s　]/, "").trim();
+  const cleanText = userText.replace(/^[\s　]*[KＫｋk][\s　]+/, "").trim();
 
   const gpt = await ai.chat.completions.create({
     model: "gpt-4o-mini",
@@ -90,6 +88,10 @@ if (ev.message.type === "text") {
     ]
   });
 
+  const answer = gpt.choices[0].message.content || "了解です。";
+  await lineClient.replyMessage(ev.replyToken, [{ type: "text", text: answer }]);
+  console.log("✅ LINEテキスト返信:", answer);
+}
   const answer = gpt.choices[0].message.content || "了解です。";
   await lineClient.replyMessage(ev.replyToken, [{ type: "text", text: answer }]);
   console.log("✅ LINEテキスト返信:", answer);
