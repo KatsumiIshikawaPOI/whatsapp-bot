@@ -5,8 +5,13 @@ import OpenAI from "openai";
 import line from "@line/bot-sdk";
 
 const app = express();
-app.use(express.urlencoded({ extended: false }));
+
+// ✅ ここを追加（LINEの署名検証エラー修正）
+app.use("/line-webhook", express.raw({ type: "application/json" }));
+
+// WhatsAppなど他のルートでは通常のJSONを使う
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 
 // ===== Twilio & OpenAI 設定 =====
 const tw = twilio(process.env.TWILIO_SID, process.env.TWILIO_AUTH_TOKEN);
