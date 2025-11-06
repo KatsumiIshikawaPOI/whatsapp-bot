@@ -5,36 +5,70 @@ import OpenAI from "openai";
 import line from "@line/bot-sdk";
 import fetch from "node-fetch";
 import fs from "fs";
-import XLSX from "xlsx";
+import * as XLSX from "xlsx";
 
 const app = express();
+
+/* ===== 公開URL（RenderのURLを既定値に） ===== */
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || "https://k-whatsapp-bot.onrender.com";
+
+/* ===== LINE 署名検証用に raw(JSON) を最優先で適用 ===== */
 app.use("/line-webhook", express.raw({ type: "application/json" }));
+
+/* ===== そのほかのルート用 ===== */
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
-// ===== Twilio & OpenAI 設定 =====
+/* ===== Twilio & OpenAI 設定 ===== */
 const tw = twilio(process.env.TWILIO_SID, process.env.TWILIO_AUTH_TOKEN);
 const ai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
   organization: process.env.OPENAI_ORG,
-  project: process.env.OPENAI_PROJECT
+  project: process.env.OPENAI_PROJECT,
 });
 
-// ===== LINE設定 =====
+/* ===== LINE 設定 ===== */
 const lineConfig = {
   channelSecret: process.env.LINE_CHANNEL_SECRET,
-  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN
+  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
 };
 const lineClient = new line.Client(lineConfig);
 
-// ===== LINE Webhook =====
+/* -------------------------------------------------
+   1) Excelダウンロード用ルート
+   ------------------------------------------------- */
+app.get("/files/:name", (req, res) => {
+  const name = (req.params.name || "").replace(/[^a-zA-Z0-9_.-]/g, "");
+  const p = `/tmp/${name}`;
+  if (fs.existsSync(p)) {
+    return res.download(p, name); // attachment
+  }
+  return res.status(404).send("Not found");
+});
+
+/* -------------------------------------------------
+   2) LINE Webhook
+   ------------------------------------------------- */
 app.post("/line-webhook", line.middleware(lineConfig), async (req, res) => {
   res.status(200).end();
-  for (const ev of req.body.events) {
+
+  // raw 適用環境では req.body は Buffer の場合があるため両対応
+  let body;
+  try {
+    body = req.body?.events ? req.body : JSON.parse(req.body.toString("utf8"));
+  } catch {
+    body = req.body || {};
+  }
+
+  const events = body.events || [];
+  for (const ev of events) {
     try {
-      // テキストメッセージ処理
-      if (ev.type === "message" && ev.message.type === "text") {
-        const userText = ev.message.text;
+      if (ev.type !== "message") continue;
+
+      /* ===== テキスト ===== */
+      if (ev.message.type === "text") {
+        const userText = (ev.message.text || "").trim();
+
         const gpt = await ai.chat.completions.create({
           model: "gpt-4o-mini",
           messages: [
@@ -42,61 +76,73 @@ app.post("/line-webhook", line.middleware(lineConfig), async (req, res) => {
             { role: "user", content: userText }
           ]
         });
+
         const answer = gpt.choices[0].message.content || "了解です。";
         await lineClient.replyMessage(ev.replyToken, [{ type: "text", text: answer }]);
-        console.log("✅ LINE返信:", answer);
+        console.log("✅ LINEテキスト返信:", answer);
       }
 
-      // 画像メッセージ処理
-      else if (ev.type === "message" && ev.message.type === "image") {
+      /* ===== 画像 → OCR → Excel生成 → ダウンロードURL返信 ===== */
+      else if (ev.message.type === "image") {
         console.log("🖼️ 画像メッセージを受信しました");
         const messageId = ev.message.id;
         const url = `https://api-data.line.me/v2/bot/message/${messageId}/content`;
 
-        const response = await fetch(url, {
+        // 画像バイナリ取得
+        const resImg = await fetch(url, {
           headers: { Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` }
         });
-        const buffer = Buffer.from(await response.arrayBuffer());
-        fs.writeFileSync("/tmp/upload.jpg", buffer);
+        const buffer = Buffer.from(await resImg.arrayBuffer());
 
+        // Visionで表データをJSONに抽出
         const base64Image = buffer.toString("base64");
-        const result = await ai.chat.completions.create({
+        const vision = await ai.chat.completions.create({
           model: "gpt-4o-mini",
           messages: [
             {
               role: "user",
               content: [
-                { type: "text", text: "この表をJSON形式で抽出してください（date, delivery, credit, cash, total, diff, mark）" },
+                { type: "text", text: "この画像の表をJSON配列で抽出してください。各要素は date, delivery, credit, cash, total, diff, mark のキーを持ちます。JSON以外の説明文は付けずに返してください。" },
                 { type: "image_url", image_url: { url: "data:image/jpeg;base64," + base64Image } }
               ]
             }
           ]
         });
 
-        const rawText = result.choices[0].message.content;
-        console.log("📊 OCR結果:", rawText);
+        const rawText = vision.choices[0].message.content || "";
+        console.log("📊 OCR結果（生）:", rawText.slice(0, 300) + (rawText.length > 300 ? "..." : ""));
 
-        // ===== JSON整形修正（GPT出力の前後をトリミング） =====
+        // GPTの返すJSON前後に説明が混ざるケースに備えてクリーンアップ
         const cleanJson = rawText
-          .replace(/```json/g, "")
+          .replace(/```json/gi, "")
           .replace(/```/g, "")
-          .replace(/^[^{\[]*/, "")
-          .replace(/[^{\]]*$/, "")
+          .replace(/^[^{\[]*/s, "")
+          .replace(/[^\]}]*$/s, "")
           .trim();
 
         try {
-          const data = JSON.parse(cleanJson);
+          const data = JSON.parse(cleanJson); // ← ここで配列にパース
+          if (!Array.isArray(data)) throw new Error("JSON配列ではありません");
+
+          // Excel生成
           const ws = XLSX.utils.json_to_sheet(data);
           const wb = XLSX.utils.book_new();
           XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
-          const filePath = "/tmp/output.xlsx";
+
+          const ts = Date.now();
+          const fileName = `output_${ts}.xlsx`;
+          const filePath = `/tmp/${fileName}`;
           XLSX.writeFile(wb, filePath);
 
+          const dlUrl = `${PUBLIC_BASE_URL}/files/${fileName}`;
+
+          // LINEへダウンロードURL返信
           await lineClient.replyMessage(ev.replyToken, [
-            { type: "text", text: "✅ 画像の表をExcelに変換しました。" }
+            { type: "text", text: "✅ 画像の表をExcelに変換しました。ダウンロードはこちら👇" },
+            { type: "text", text: dlUrl }
           ]);
 
-          console.log("✅ Excel生成完了:", filePath);
+          console.log("✅ Excel生成完了:", filePath, "URL:", dlUrl);
         } catch (e) {
           console.error("❌ Excel出力エラー:", e.message);
           await lineClient.replyMessage(ev.replyToken, [
@@ -110,7 +156,9 @@ app.post("/line-webhook", line.middleware(lineConfig), async (req, res) => {
   }
 });
 
-// ===== WhatsApp =====
+/* -------------------------------------------------
+   3) WhatsApp（通常GPT応答）
+   ------------------------------------------------- */
 app.post("/whatsapp", async (req, res) => {
   console.log("📩 WhatsApp受信:", req.body);
   res.status(200).send("OK");
@@ -136,4 +184,7 @@ app.post("/whatsapp", async (req, res) => {
   }
 });
 
+/* -------------------------------------------------
+   4) 起動
+   ------------------------------------------------- */
 app.listen(3000, () => console.log("🚀 Kサーバー起動完了（ポート3000）"));
