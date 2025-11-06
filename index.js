@@ -7,7 +7,7 @@ import fetch from "node-fetch";
 import fs from "fs";
 
 const app = express();
-app.use("/line-webhook", express.raw({ type: "application/json" })); // LINE署名用
+app.use("/line-webhook", express.raw({ type: "application/json" }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
@@ -31,51 +31,50 @@ app.post("/line-webhook", line.middleware(lineConfig), async (req, res) => {
   res.status(200).end();
   for (const ev of req.body.events) {
     try {
-      // 📩 テキストメッセージ
+      // テキストメッセージ処理
       if (ev.type === "message" && ev.message.type === "text") {
         const userText = ev.message.text;
         const gpt = await ai.chat.completions.create({
           model: "gpt-4o-mini",
           messages: [
-            { role: "system", content: "You are K, a friendly AI assistant for a restaurant/spa business in Qatar. Reply in Japanese when the user speaks Japanese." },
+            { role: "system", content: "You are K, a polite Japanese assistant for restaurant/spa operations in Qatar." },
             { role: "user", content: userText }
           ]
         });
         const answer = gpt.choices[0].message.content || "了解です。";
         await lineClient.replyMessage(ev.replyToken, [{ type: "text", text: answer }]);
-        console.log("✅ LINEテキスト返信:", answer);
+        console.log("✅ LINE返信:", answer);
       }
 
-      // 🖼️ 画像メッセージ
+      // 画像メッセージ処理
       else if (ev.type === "message" && ev.message.type === "image") {
+        console.log("🖼️ 画像メッセージを受信しました");
         const messageId = ev.message.id;
         const url = `https://api-data.line.me/v2/bot/message/${messageId}/content`;
 
-        const resImage = await fetch(url, {
+        const response = await fetch(url, {
           headers: { Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` }
         });
-
-        const buffer = Buffer.from(await resImage.arrayBuffer());
+        const buffer = Buffer.from(await response.arrayBuffer());
         fs.writeFileSync("/tmp/upload.jpg", buffer);
-        console.log("🖼️ 画像を受信。解析開始...");
 
-        // OpenAIのVision APIで画像を解析
-        const visionRes = await ai.chat.completions.create({
+        // GPT-4o で画像解析
+        const result = await ai.chat.completions.create({
           model: "gpt-4o-mini",
           messages: [
             {
               role: "user",
               content: [
-                { type: "text", text: "この画像を分析して内容を説明してください。" },
+                { type: "text", text: "この画像の内容を簡潔に説明してください。" },
                 { type: "image_url", image_url: "data:image/jpeg;base64," + buffer.toString("base64") }
               ]
             }
           ]
         });
 
-        const description = visionRes.choices[0].message.content || "画像を読み取れませんでした。";
-        await lineClient.replyMessage(ev.replyToken, [{ type: "text", text: description }]);
-        console.log("✅ 画像解析完了:", description);
+        const desc = result.choices[0].message.content || "画像を確認しました。";
+        await lineClient.replyMessage(ev.replyToken, [{ type: "text", text: desc }]);
+        console.log("✅ 画像解析完了:", desc);
       }
     } catch (e) {
       console.error("❌ LINE処理エラー:", e?.message || e);
@@ -103,9 +102,9 @@ app.post("/whatsapp", async (req, res) => {
       to: from,
       body: reply
     });
-    console.log("✅ Kの返信:", reply);
+    console.log("✅ WhatsApp返信:", reply);
   } catch (e) {
-    console.error("❌ エラー:", e.message);
+    console.error("❌ WhatsAppエラー:", e.message);
   }
 });
 
