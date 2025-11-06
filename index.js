@@ -5,6 +5,7 @@ import OpenAI from "openai";
 import line from "@line/bot-sdk";
 import fetch from "node-fetch";
 import fs from "fs";
+import XLSX from "xlsx";
 
 const app = express();
 app.use("/line-webhook", express.raw({ type: "application/json" }));
@@ -58,7 +59,6 @@ app.post("/line-webhook", line.middleware(lineConfig), async (req, res) => {
         const buffer = Buffer.from(await response.arrayBuffer());
         fs.writeFileSync("/tmp/upload.jpg", buffer);
 
-        // GPT-4o で OCR解析（表データ抽出）
         const base64Image = buffer.toString("base64");
         const result = await ai.chat.completions.create({
           model: "gpt-4o-mini",
@@ -66,36 +66,41 @@ app.post("/line-webhook", line.middleware(lineConfig), async (req, res) => {
             {
               role: "user",
               content: [
-                { type: "text", text: "この画像の表をJSON形式（date, delivery, credit, cash, total, diff, mark）で抽出してください。" },
+                { type: "text", text: "この表をJSON形式で抽出してください（date, delivery, credit, cash, total, diff, mark）" },
                 { type: "image_url", image_url: { url: "data:image/jpeg;base64," + base64Image } }
               ]
             }
           ]
         });
 
-        const extractedText = result.choices[0].message.content;
-        console.log("📊 OCR結果:", extractedText);
+        const rawText = result.choices[0].message.content;
+        console.log("📊 OCR結果:", rawText);
 
-        // JSON解析 & Excel書き出し
+        // ===== JSON整形修正（GPT出力の前後をトリミング） =====
+        const cleanJson = rawText
+          .replace(/```json/g, "")
+          .replace(/```/g, "")
+          .replace(/^[^{\[]*/, "")
+          .replace(/[^{\]]*$/, "")
+          .trim();
+
         try {
-          const data = JSON.parse(extractedText);
-          const XLSX = await import("xlsx");
+          const data = JSON.parse(cleanJson);
           const ws = XLSX.utils.json_to_sheet(data);
           const wb = XLSX.utils.book_new();
           XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
           const filePath = "/tmp/output.xlsx";
           XLSX.writeFile(wb, filePath);
 
-          // LINEで通知
           await lineClient.replyMessage(ev.replyToken, [
             { type: "text", text: "✅ 画像の表をExcelに変換しました。" }
           ]);
 
           console.log("✅ Excel生成完了:", filePath);
         } catch (e) {
-          console.error("❌ Excel出力エラー:", e);
+          console.error("❌ Excel出力エラー:", e.message);
           await lineClient.replyMessage(ev.replyToken, [
-            { type: "text", text: "Excel変換に失敗しました。" }
+            { type: "text", text: "Excel変換でエラーが発生しました。もう一度お試しください。" }
           ]);
         }
       }
