@@ -23,7 +23,14 @@ const lineConfig = {
 };
 const lineClient = new line.Client(lineConfig);
 
-// ===== LINE Webhook: 呼びかけ「K」時のみ返信 =====
+// 半角/全角のKをどちらも検出できるように正規化
+const normalizeK = (s="") =>
+  s.replace(/Ｋ/g, "K").replace(/ｋ/g, "k");
+
+
+// ============================================================
+// LINE Webhook: 1対1は常に返信 / グループは「KKK」or「K 呼びかけ」で返信
+// ============================================================
 app.post("/line-webhook", line.middleware(lineConfig), async (req, res) => {
   res.status(200).end(); // 先にACK
 
@@ -31,46 +38,56 @@ app.post("/line-webhook", line.middleware(lineConfig), async (req, res) => {
     try {
       if (ev.type !== "message" || ev.message.type !== "text") continue;
 
-      const userText = (ev.message.text || "").trim();
-      const is1on1 = ev.source.type === "user"; // 1対1トーク判定
+      const rawText = (ev.message.text || "").trim();
+      const userText = rawText;                 // 表示用
+      const normText = normalizeK(rawText);     // 判定用（全角→半角）
 
-      // 文頭または文中の「K」「ｋ」「Ｋ」「k」を検出
-      const calledK = /^ *[KＫｋk][\s　]/.test(userText) || userText.includes(" K ") || userText.includes("Ｋ ");
+      // 1対1なら常に返信
+      const is1on1 = ev.source.type === "user";
 
-      // グループでは「K呼びかけ」がないと返信しない
-      if (!is1on1 && !calledK) {
-        console.log("（スルー）呼びかけなし:", userText);
+      // トリガー判定：
+      // A) 先頭が「K 」呼びかけ
+      const calledK = /^ *[Kk][\s　]/.test(normText);
+      // B) 文中に「KKK」が含まれる（大文字小文字区別なし、全角対応）
+      const hasKKK  = /kkk/i.test(normText);
+
+      // グループ/ルームでは上記トリガーが無ければスルー
+      if (!is1on1 && !(calledK || hasKKK)) {
+        console.log("（スルー）トリガーなし:", userText);
         continue;
       }
 
-      // 「K こんにちは」→ 「こんにちは」に変換してGPTへ送る
-      const cleanText = userText.replace(/^ *[KＫｋk][\s　]/, "").trim();
+      // 「K 呼びかけ」で始まる場合は先頭のKと空白を削って送る
+      const cleanText = calledK ? normText.replace(/^ *[Kk][\s　]/, "").trim() : normText;
 
-      // ChatGPTに送信
+      // === ChatGPTへ ===
       const gpt = await ai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
           {
             role: "system",
-            content: "You are K, reply concisely in Japanese when the user writes in Japanese. Be helpful for restaurant/spa operations."
+            content:
+              "You are K, reply concisely in Japanese when the user writes in Japanese. Be helpful for restaurant/spa operations."
           },
-          { role: "user", content: cleanText || userText }
+          { role: "user", content: cleanText }
         ]
       });
 
       const answer = gpt.choices[0].message.content || "了解です。";
 
-      // LINEへ返信
       await lineClient.replyMessage(ev.replyToken, [{ type: "text", text: answer }]);
       console.log("✅ LINE返信:", answer);
 
     } catch (e) {
-      console.error("❌ LINEエラー:", e.message);
+      console.error("❌ LINEエラー:", e?.message || e);
     }
   }
 });
 
-// ===== WhatsAppは今のままでOK =====
+
+// ============================================================
+// WhatsApp Webhook（従来どおり常に返信）
+// ============================================================
 app.post("/whatsapp", async (req, res) => {
   console.log("📩 WhatsApp受信:", req.body);
   res.status(200).send("OK");
@@ -82,7 +99,11 @@ app.post("/whatsapp", async (req, res) => {
     const gpt = await ai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
-        { role: "system", content: "You are K, an assistant for Japan Village Restaurant & SPA in Qatar." },
+        {
+          role: "system",
+          content:
+            "You are K, an assistant for Japan Village Restaurant & SPA in Qatar."
+        },
         { role: "user", content: userMessage }
       ]
     });
@@ -90,7 +111,7 @@ app.post("/whatsapp", async (req, res) => {
     const reply = gpt.choices[0].message.content;
 
     await tw.messages.create({
-      from: "whatsapp:+15558495973", // Twilioの送信番号
+      from: "whatsapp:+15558495973", // ← あなたのTwilio Business番号
       to: from,
       body: reply
     });
