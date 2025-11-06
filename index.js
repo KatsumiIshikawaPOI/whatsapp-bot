@@ -66,8 +66,8 @@ app.post("/line-webhook", line.middleware(lineConfig), async (req, res) => {
             {
               role: "user",
               content: [
-                { type: "input_text", text: "この画像の内容を簡潔に説明してください。" },
-                { type: "input_image", image_data: base64Image }
+                { type: "text", text: "この画像の内容を日本語で簡潔に説明してください。" },
+                { type: "image_url", image_url: { url: "data:image/jpeg;base64," + base64Image } }
               ]
             }
           ]
