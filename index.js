@@ -65,23 +65,35 @@ app.post("/line-webhook", line.middleware(lineConfig), async (req, res) => {
     try {
       if (ev.type !== "message") continue;
 
-      /* ===== テキスト ===== */
-      if (ev.message.type === "text") {
-        const userText = (ev.message.text || "").trim();
+   /* ===== テキスト ===== */
+if (ev.message.type === "text") {
+  const userText = (ev.message.text || "").trim();
+  const is1on1 = ev.source?.type === "user"; // 個チャかグループか
 
-        const gpt = await ai.chat.completions.create({
-          model: "gpt-4o-mini",
-          messages: [
-            { role: "system", content: "You are K, a polite Japanese assistant for restaurant/spa operations in Qatar." },
-            { role: "user", content: userText }
-          ]
-        });
+  // グループでは「K 」または「Ｋ 」で始まる場合のみ反応
+  const calledK = /^ *[KＫｋk][\s　]/.test(userText);
 
-        const answer = gpt.choices[0].message.content || "了解です。";
-        await lineClient.replyMessage(ev.replyToken, [{ type: "text", text: answer }]);
-        console.log("✅ LINEテキスト返信:", answer);
-      }
+  // 条件：1対1 or 呼びかけがある場合のみ返信
+  if (!is1on1 && !calledK) {
+    console.log("（スルー）呼びかけなし:", userText);
+    continue;
+  }
 
+  // 「K 」を削除してクリーンに
+  const cleanText = userText.replace(/^ *[KＫｋk][\s　]/, "").trim();
+
+  const gpt = await ai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      { role: "system", content: "You are K, a polite Japanese assistant for restaurant/spa operations in Qatar." },
+      { role: "user", content: cleanText || userText }
+    ]
+  });
+
+  const answer = gpt.choices[0].message.content || "了解です。";
+  await lineClient.replyMessage(ev.replyToken, [{ type: "text", text: answer }]);
+  console.log("✅ LINEテキスト返信:", answer);
+}
       /* ===== 画像 → OCR → Excel生成 → ダウンロードURL返信 ===== */
       else if (ev.message.type === "image") {
         console.log("🖼️ 画像メッセージを受信しました");
