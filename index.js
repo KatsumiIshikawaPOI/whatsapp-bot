@@ -6,7 +6,7 @@ import line from "@line/bot-sdk";
 
 const app = express();
 
-/* ===== LINE: 署名検証を通すため raw(JSON) 優先 ===== */
+// ===== LINE設定（rawで署名検証を通す） =====
 const lineConfig = {
   channelSecret: process.env.LINE_CHANNEL_SECRET,
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN
@@ -19,7 +19,7 @@ app.post(
   express.raw({ type: "application/json" }),
   (req, res, next) => line.middleware(lineConfig)(req, res, next),
   async (req, res) => {
-    res.status(200).end(); // ACK
+    res.status(200).end();
     let body;
     try {
       body = req.body?.events ? req.body : JSON.parse(req.body.toString("utf8"));
@@ -35,7 +35,7 @@ app.post(
         const is1on1 = ev.source?.type === "user";
         const userText = ev.message.type === "text" ? ev.message.text.trim() : "";
 
-        /* === グループ内では「K 」呼びかけ時のみ反応 === */
+        // --- グループでは「K 」呼びかけのみ反応
         const calledK =
           /^ *[KＫｋk][\s　]/.test(userText) ||
           userText.includes(" K ") ||
@@ -46,7 +46,6 @@ app.post(
           continue;
         }
 
-        // 先頭のKを削除
         const cleanText = userText.replace(/^ *[KＫｋk][\s　]/, "").trim();
 
         // === 画像処理 ===
@@ -92,9 +91,8 @@ app.post(
           continue;
         }
 
-        // === テキストモード ===
+        // === テキスト（GPT応答／エクセル） ===
         if (ev.message.type === "text") {
-          // Excel支援モード
           if (/^excel[:：]/i.test(cleanText) || /^エクセル[:：]/.test(cleanText)) {
             const payload = cleanText
               .replace(/^excel[:：]/i, "")
@@ -102,9 +100,6 @@ app.post(
               .trim();
             const help =
               "以下の形式で貼るとCSVを返します👇\n" +
-              "1行目：列名（例）Date,Delivery,Credit,Cash,Total,Diff,Mark\n" +
-              "2行目以降：値（カンマ区切り）\n\n" +
-              "例：\n" +
               "Date,Delivery,Credit,Cash,Total,Diff,Mark\n" +
               "2025-09-21,934,1790,205,2929,-,ok";
             if (!payload) {
@@ -115,16 +110,12 @@ app.post(
             }
             const csv = payload;
             await lineClient.replyMessage(ev.replyToken, [
-              {
-                type: "text",
-                text: "CSVを返します。Excelに貼り付けてお使いください👇"
-              },
+              { type: "text", text: "Excelに貼り付けて使えるCSVです👇" },
               { type: "text", text: "```csv\n" + csv + "\n```" }
             ]);
             continue;
           }
 
-          // 通常GPT応答
           const aiClient = new OpenAI({
             apiKey: process.env.OPENAI_API_KEY,
             organization: process.env.OPENAI_ORG,
@@ -157,7 +148,7 @@ app.post(
   }
 );
 
-/* ===== WhatsApp設定 ===== */
+// ===== WhatsApp =====
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
@@ -188,7 +179,7 @@ app.post("/whatsapp", async (req, res) => {
 
     const reply = gpt.choices[0].message.content;
     await tw.messages.create({
-      from: "whatsapp:+15558495973", // Twilio番号
+      from: "whatsapp:+15558495973",
       to: from,
       body: reply
     });
@@ -198,5 +189,5 @@ app.post("/whatsapp", async (req, res) => {
   }
 });
 
-/* ===== サーバー起動 ===== */
+// ===== 起動 =====
 app.listen(3000, () => console.log("🚀 Kサーバー起動完了（ポート3000）"));
